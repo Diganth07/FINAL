@@ -7,7 +7,7 @@ import { getFirestore, collection, doc, setDoc, onSnapshot, query } from "fireba
 
 // --- 1. FIREBASE CONFIGURATION ---
 const firebaseConfig = {
-  apiKey: "AIzaSyAnlVDILr4oESgreFDKMrqa3-tGeBtefII",
+  apiKey: ,
   authDomain: "clubtechevent.firebaseapp.com",
   projectId: "clubtechevent",
   storageBucket: "clubtechevent.firebasestorage.app",
