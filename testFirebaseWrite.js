@@ -3,9 +3,9 @@ const { getFirestore, doc, setDoc } = require('firebase/firestore');
 
 const firebaseConfig = {
   apiKey: "AIzaSyAxF7DVaAVGZ-8GHqhtNHcdU-ERdbbBQWE",
-  authDomain: "hackandcrack-prototype.firebaseapp.com",
-  projectId: "hackandcrack-prototype",
-  storageBucket: "hackandcrack-prototype.firebasestorage.app",
+  authDomain: "hackandcrack-protype.firebaseapp.com",
+  projectId: "hackandcrack-protype",
+  storageBucket: "hackandcrack-protype.firebasestorage.app",
   messagingSenderId: "1079618302498",
   appId: "1:1079618302498:web:a92dd4a77f5503befa107b"
 };

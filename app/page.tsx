@@ -634,7 +634,7 @@ export default function EventPlatform() {
     };
   }, [view]);
 
-  /* Anti-Cheat: Tab Switching Detection (Temporarily Disabled)
+  // Anti-Cheat: Tab Switching Detection
   useEffect(() => {
     if (view !== "game" || !teamName) return;
 
@@ -657,7 +657,6 @@ export default function EventPlatform() {
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, [view, teamName, tabSwitches]);
-  */
 
   // Restore timer on load
   useEffect(() => {
@@ -741,7 +740,11 @@ export default function EventPlatform() {
     const unsubscribeActive = onSnapshot(qActive, (snapshot) => {
       const liveBoard = snapshot.docs
         .filter(doc => doc.data().active === true)
-        .map(doc => ({ team: doc.id, score: doc.data().score || 0 }));
+        .map(doc => ({ 
+          team: doc.id, 
+          score: doc.data().score || 0,
+          tabSwitches: doc.data().tabSwitches || 0 
+        }));
       setLeaderboard(liveBoard.sort((a, b) => b.score - a.score));
     });
 
@@ -829,6 +832,7 @@ export default function EventPlatform() {
 
       if (!matchedTeamDoc) {
         console.log("❌ No matching team found in database.");
+        // PROACTIVE FIX: Check if they are using the correct Project ID in the alert too
         alert(`❌ Login Failed!\n\n1. Check if Team "${teamName}" exists in your Firebase 'teams' collection.\n2. Ensure the password matches exactly.\n3. Verify your Project ID is "${firebaseConfig.projectId}" (it must match where you added the teams).`);
         setIsLoggingIn(false);
         return;
@@ -842,6 +846,7 @@ export default function EventPlatform() {
       const activeQuery = query(collection(db, "activeSessions"), where("teamName", "==", actualTeamName));
       const activeSnapshot = await getDocs(activeQuery);
 
+      /* RESTRICTION REMOVED: Allow multiple devices if needed, or taking over session
       if (!activeSnapshot.empty) {
         const existingSession = activeSnapshot.docs[0].data();
         if (existingSession.active === true && existingSession.deviceId !== deviceId) {
@@ -850,6 +855,8 @@ export default function EventPlatform() {
           return;
         }
       }
+      */
+
 
       // Get existing progress if session already exists
       let currentScore = teamData.score || 0;
@@ -924,7 +931,7 @@ export default function EventPlatform() {
     }
   };
 
-  const syncProgress = async (updates: { score?: number, round?: number, qIndex?: number, answered?: number[], isFinished?: boolean, isRound1Completed?: boolean }, targetTeam?: string) => {
+  const syncProgress = async (updates: { score?: number, round?: number, qIndex?: number, answered?: number[], isFinished?: boolean, isRound1Completed?: boolean, tabSwitches?: number }, targetTeam?: string) => {
     const name = targetTeam || teamName || localStorage.getItem("eventTeamName");
     if (!name) return;
 
@@ -935,6 +942,7 @@ export default function EventPlatform() {
     if (updates.answered !== undefined) data.answeredInR1 = updates.answered;
     if (updates.isFinished !== undefined) data.isFinished = updates.isFinished;
     if (updates.isRound1Completed !== undefined) data.isRound1Completed = updates.isRound1Completed;
+    if (updates.tabSwitches !== undefined) data.tabSwitches = updates.tabSwitches;
 
     try {
       await setDoc(doc(db, "activeSessions", name), data, { merge: true });
@@ -2050,8 +2058,8 @@ export default function EventPlatform() {
                             localStorage.setItem("eventQIndex", nextIndex.toString());
                             syncProgress({ score: newScore, qIndex: nextIndex, answered: answeredArr });
                           } else {
-                            setIsTimerActive(false);
-                            localStorage.setItem("eventTimerActive", "false");
+                            setIsQuestionTimerActive(false);
+                            localStorage.setItem("eventQTimerActive", "false");
                             setIsRound1Completed(true);
                             localStorage.setItem("eventRound1Completed", "true");
                             syncProgress({ score: newScore, answered: answeredArr });
@@ -2063,8 +2071,8 @@ export default function EventPlatform() {
                             localStorage.setItem("eventQIndex", nextIndex.toString());
                             syncProgress({ qIndex: nextIndex });
                           } else {
-                            setIsTimerActive(false);
-                            localStorage.setItem("eventTimerActive", "false");
+                            setIsQuestionTimerActive(false);
+                            localStorage.setItem("eventQTimerActive", "false");
                             setIsRound1Completed(true);
                             localStorage.setItem("eventRound1Completed", "true");
                           }
