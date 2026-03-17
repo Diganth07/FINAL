@@ -1,4 +1,4 @@
-﻿# dependencies
+# dependencies
 node_modules/
 /.pnp
 .pnp.js
@@ -36,6 +36,7 @@ Thumbs.db
 # Firebase
 firebase-debug.log
 .firebase/
+serviceAccountKey.json
 
 # Vercel
 .vercel

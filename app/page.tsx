@@ -3,19 +3,19 @@
 import { useState, useEffect, useRef } from "react";
 import Editor from "@monaco-editor/react";
 import { initializeApp } from "firebase/app";
-import { getFirestore, collection, doc, setDoc, onSnapshot, query, where, getDocs } from "firebase/firestore";
+import { getFirestore, collection, doc, getDoc, setDoc, onSnapshot, query, where, getDocs } from "firebase/firestore";
 import { motion, AnimatePresence } from "framer-motion";
-import { 
-  Trophy, 
-  Terminal, 
-  Cpu, 
-  User, 
-  ShieldCheck, 
-  LogOut, 
-  Play, 
-  RefreshCcw, 
-  ChevronRight, 
-  Code2, 
+import {
+  Trophy,
+  Terminal,
+  Cpu,
+  User,
+  ShieldCheck,
+  LogOut,
+  Play,
+  RefreshCcw,
+  ChevronRight,
+  Code2,
   Award,
   Users,
   Timer,
@@ -52,7 +52,7 @@ const getDeviceId = () => {
 
 // --- 2. EVENT CONFIGURATION ---
 const VENUE_CODE = "JAIN-TECH-2026";
-const ADMIN_PASSWORD = "admin";
+const ADMIN_PASSWORD = "private1$";
 
 const questions = [
   {
@@ -480,7 +480,7 @@ const questions = [
 export default function EventPlatform() {
   const [view, setView] = useState("role-selection");
   const [teamName, setTeamName] = useState("");
-  const [leaderName, setLeaderName] = useState(""); // This acts as password
+  const [password, setPassword] = useState(""); // This acts as password
   const [inputVenueCode, setInputVenueCode] = useState("");
   const [inputAdminPass, setInputAdminPass] = useState("");
   const [round, setRound] = useState(1);
@@ -495,8 +495,6 @@ export default function EventPlatform() {
   const [answeredInR1, setAnsweredInR1] = useState<Set<number>>(new Set());
   const [isFinished, setIsFinished] = useState(false);
   const [showRoundIntro, setShowRoundIntro] = useState(false);
-  const [timeLeft, setTimeLeft] = useState(300); // 5 minutes in seconds
-  const [isTimerActive, setIsTimerActive] = useState(false);
   const [round1Enabled, setRound1Enabled] = useState(false);
   const [isRound1Completed, setIsRound1Completed] = useState(false);
   const [globalTimeLeft, setGlobalTimeLeft] = useState(300);
@@ -504,6 +502,8 @@ export default function EventPlatform() {
   const [tabSwitches, setTabSwitches] = useState(0);
   const [questionTimeLeft, setQuestionTimeLeft] = useState(30);
   const [isQuestionTimerActive, setIsQuestionTimerActive] = useState(false);
+  const [round2Enabled, setRound2Enabled] = useState(false);
+  const [timerEndTime, setTimerEndTime] = useState<number | null>(null);
 
   // Refs to avoid stale closures inside async runCode
   const currentQIndexRef = useRef(currentQIndex);
@@ -516,85 +516,75 @@ export default function EventPlatform() {
   useEffect(() => { scoreRef.current = score; }, [score]);
   useEffect(() => { teamNameRef.current = teamName; }, [teamName]);
 
-  // Timer Logic
-  useEffect(() => {
-    let interval: any = null;
-    if (isTimerActive && timeLeft > 0 && round === 1 && round1Enabled) {
-      interval = setInterval(() => {
-        setTimeLeft((prev) => {
-          const newTime = prev - 1;
-          localStorage.setItem("eventTimeLeft", newTime.toString());
-          return newTime;
-        });
-      }, 1000);
-    } else if (timeLeft === 0 && isTimerActive) {
-      setIsTimerActive(false);
-      localStorage.setItem("eventTimerActive", "false");
-      setIsRound1Completed(true);
-      localStorage.setItem("eventRound1Completed", "true");
-      alert("⏰ Time is up for Round 1!");
-      // NO AUTO-TRANSITION TO ROUND 2
-    }
-    return () => clearInterval(interval);
-  }, [isTimerActive, timeLeft, round, round1Enabled]);
-
   // Global Event Settings Listener
   useEffect(() => {
     const unsub = onSnapshot(doc(db, "eventSettings", "metadata"), (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
         setRound1Enabled(data.round1Enabled || false);
-        setGlobalTimeLeft(data.globalTimeLeft ?? 300);
+        setRound2Enabled(data.round2Enabled || false);
         setGlobalTimerActive(data.globalTimerActive ?? false);
+
+        if (data.globalTimerActive && data.timerEndTime) {
+          setTimerEndTime(data.timerEndTime);
+        } else {
+          setTimerEndTime(null);
+          setGlobalTimeLeft(data.globalTimeLeft ?? 300);
+        }
       }
     });
     return () => unsub();
   }, []);
 
-  // Admin Countdown Logic (Only runs if view is admin-dashboard)
+  // Synchronize Local Clock with Global End Time
   useEffect(() => {
     let interval: any = null;
-    if (view === "admin-dashboard" && globalTimerActive && globalTimeLeft > 0) {
-      interval = setInterval(async () => {
-        const newTime = globalTimeLeft - 1;
-        await setDoc(doc(db, "eventSettings", "metadata"), { globalTimeLeft: newTime }, { merge: true });
-        if (newTime <= 0) {
-          await setDoc(doc(db, "eventSettings", "metadata"), { globalTimerActive: false }, { merge: true });
+    if (globalTimerActive && timerEndTime) {
+      interval = setInterval(() => {
+        const now = Date.now();
+        const remaining = Math.max(0, Math.floor((timerEndTime - now) / 1000));
+        setGlobalTimeLeft(remaining);
+
+        if (remaining <= 0) {
+          setIsRound1Completed(true);
+          setGlobalTimerActive(false);
+          localStorage.setItem("eventRound1Completed", "true");
         }
-      }, 1000);
+      }, 500); // Check half-second for smoothness
     }
     return () => clearInterval(interval);
-  }, [view, globalTimerActive, globalTimeLeft]);
+  }, [globalTimerActive, timerEndTime]);
 
   // Participant Global Enforcement
   useEffect(() => {
-    if (round === 1 && globalTimeLeft <= 0 && round1Enabled) {
-      setIsRound1Completed(true);
-      localStorage.setItem("eventRound1Completed", "true");
-    }
-    // Auto-start if admin initiated
-    if (round === 1 && round1Enabled && globalTimerActive && showRoundIntro) {
+    if (round === 1 && globalTimerActive && showRoundIntro) {
       setShowRoundIntro(false);
       setQuestionTimeLeft(30);
       setIsQuestionTimerActive(true);
       localStorage.setItem("eventQTimeLeft", "30");
       localStorage.setItem("eventQTimerActive", "true");
     }
-  }, [round, globalTimeLeft, round1Enabled, globalTimerActive, showRoundIntro]);
+  }, [round, globalTimerActive, showRoundIntro]);
 
   // Per-Question Timer Logic
   useEffect(() => {
-    let interval: any = null;
-    if (isQuestionTimerActive && questionTimeLeft > 0 && round === 1) {
-      interval = setInterval(() => {
-        setQuestionTimeLeft((prev) => {
-          const newTime = prev - 1;
-          localStorage.setItem("eventQTimeLeft", newTime.toString());
-          return newTime;
-        });
-      }, 1000);
-    } else if (questionTimeLeft === 0 && isQuestionTimerActive) {
-      // Auto-advance logic
+    if (!isQuestionTimerActive || round !== 1 || !round1Enabled) return;
+
+    let interval = setInterval(() => {
+      setQuestionTimeLeft((prev) => {
+        if (prev <= 1) return 0;
+        const next = prev - 1;
+        localStorage.setItem("eventQTimeLeft", next.toString());
+        return next;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [isQuestionTimerActive, round, round1Enabled]);
+
+  // Question Timer End Logic
+  useEffect(() => {
+    if (questionTimeLeft === 0 && isQuestionTimerActive && round === 1) {
       const nextIndex = currentQIndex + 1;
       if (nextIndex < 30) {
         setQuestionTimeLeft(30);
@@ -605,10 +595,10 @@ export default function EventPlatform() {
         setIsQuestionTimerActive(false);
         setIsRound1Completed(true);
         localStorage.setItem("eventRound1Completed", "true");
+        syncProgress({ isRound1Completed: true });
       }
     }
-    return () => clearInterval(interval);
-  }, [isQuestionTimerActive, questionTimeLeft, round, round1Enabled, currentQIndex]);
+  }, [questionTimeLeft, isQuestionTimerActive, round, currentQIndex]);
 
   // Security: Prevent Right-Click and DevTools shortcuts for participants
   useEffect(() => {
@@ -626,10 +616,10 @@ export default function EventPlatform() {
         e.preventDefault();
         return false;
       }
-      
+
       // Block Ctrl+Shift+I, J, C and Ctrl+U
-      if ((e.ctrlKey && e.shiftKey && (e.key === "I" || e.key === "J" || e.key === "C")) || 
-          (e.ctrlKey && (e.key === "u" || e.key === "U"))) {
+      if ((e.ctrlKey && e.shiftKey && (e.key === "I" || e.key === "J" || e.key === "C")) ||
+        (e.ctrlKey && (e.key === "u" || e.key === "U"))) {
         e.preventDefault();
         return false;
       }
@@ -671,19 +661,10 @@ export default function EventPlatform() {
 
   // Restore timer on load
   useEffect(() => {
-    const savedTime = localStorage.getItem("eventTimeLeft");
-    const savedTimerActive = localStorage.getItem("eventTimerActive");
     const savedRound1Completed = localStorage.getItem("eventRound1Completed");
-    
     const savedQTimeLeft = localStorage.getItem("eventQTimeLeft");
     const savedQTimerActive = localStorage.getItem("eventQTimerActive");
-    
-    if (savedTime && round === 1) {
-      setTimeLeft(parseInt(savedTime));
-    }
-    if (savedTimerActive === "true" && round === 1) {
-      setIsTimerActive(true);
-    }
+
     if (savedQTimeLeft && round === 1) {
       setQuestionTimeLeft(parseInt(savedQTimeLeft));
     }
@@ -702,9 +683,9 @@ export default function EventPlatform() {
     const checkSession = async () => {
       const savedTeam = localStorage.getItem("eventTeamName");
       const storedQIndex = localStorage.getItem("eventQIndex");
-    const storedScore = localStorage.getItem("eventTeamScore");
-    const storedQTimeLeft = localStorage.getItem("eventQTimeLeft");
-    const storedQTimerActive = localStorage.getItem("eventQTimerActive");
+      const storedScore = localStorage.getItem("eventTeamScore");
+      const storedQTimeLeft = localStorage.getItem("eventQTimeLeft");
+      const storedQTimerActive = localStorage.getItem("eventQTimerActive");
       const savedDeviceId = localStorage.getItem("eventDeviceId");
 
       if (savedTeam && savedDeviceId) {
@@ -726,6 +707,7 @@ export default function EventPlatform() {
               setIsFinished(session.isFinished || localStorage.getItem("eventFinished") === "true");
               setIsRound1Completed(session.isRound1Completed || false);
               setTabSwitches(session.tabSwitches || 0);
+              setPassword(session.password || session.leaderName || ""); // Restore password/leaderName/passkey for header
               // Sync localStorage too
               localStorage.setItem("eventRound", fbRound.toString());
               localStorage.setItem("eventQIndex", fbQIndex.toString());
@@ -778,7 +760,7 @@ export default function EventPlatform() {
   const handleStudentLogin = async () => {
     if (isLoggingIn) return;
 
-    console.log("Login attempted:", { teamName, leaderName, inputVenueCode });
+    console.log("Login attempted:", { teamName, password, inputVenueCode });
 
     // Validation
     if (!teamName.trim()) {
@@ -786,8 +768,8 @@ export default function EventPlatform() {
       return;
     }
 
-    if (!leaderName.trim()) {
-      alert("❌ Please enter team leader name!");
+    if (!password.trim()) {
+      alert("❌ Please enter password!");
       return;
     }
 
@@ -795,38 +777,59 @@ export default function EventPlatform() {
 
     try {
       const deviceId = getDeviceId();
+      console.log("🔍 Starting login sequence...");
 
-      // Check if team exists in Firebase with correct leader name (CASE INSENSITIVE)
-      console.log("🔍 Checking team credentials...");
+      // Optimization: Try direct document fetch first (faster & bypasses collection list rules)
+      console.log(`Trying direct fetch for: teams/${teamName}`);
+      const teamDocRef = doc(db, "teams", teamName);
+      const directSnap = await getDoc(teamDocRef);
 
-      const allTeamsSnapshot = await getDocs(collection(db, "teams"));
       let matchedTeamDoc: any = null;
       let actualTeamName = "";
 
-      allTeamsSnapshot.forEach(doc => {
-        const data = doc.data();
+      if (directSnap.exists()) {
+        console.log("✅ Direct match found by ID!");
+        const data = directSnap.data();
+        const rawPassword = data.password || data.Password || data.pass || data.leaderName || "";
 
-        // Handle variations in field names exactly as they are in your Firebase
-        const rawTeamName = data.teamName || data.TeamName || data["Team name"] || doc.id || "";
-        const rawLeaderName = data.leaderName || data.LeaderName || data["Leader Name"] || "";
-
-        // Normalize strings by removing all spaces and making lowercase
-        const normalize = (str: string) => str.trim().toLowerCase().replace(/\s+/g, "");
-
-        const dbTeam = normalize(rawTeamName);
-        const dbLeader = normalize(rawLeaderName);
-        const inputTeam = normalize(teamName);
-        const inputLeader = normalize(leaderName);
-
-        if (dbTeam && dbLeader && dbTeam === inputTeam && dbLeader === inputLeader) {
-          matchedTeamDoc = doc;
-          actualTeamName = rawTeamName; // Use the exact casing stored in DB
+        const normalize = (str: any) => str ? str.toString().trim().toLowerCase().replace(/\s+/g, "") : "";
+        if (normalize(rawPassword) === normalize(password)) {
+          matchedTeamDoc = directSnap;
+          actualTeamName = data.teamName || directSnap.id;
+        } else {
+          console.log("❌ Password mismatch on direct document fetch.");
+          alert("❌ Invalid password for this team!");
+          setIsLoggingIn(false);
+          return;
         }
-      });
+      }
+
+      // If direct fetch fails (maybe name casing is different in DB), fallback to collection scan
+      if (!matchedTeamDoc) {
+        console.log("⚠️ Direct match failed, scanning collection as fallback...");
+        const allTeamsSnapshot = await getDocs(collection(db, "teams"));
+
+        if (allTeamsSnapshot.empty) {
+          console.warn("⚠️ No teams found in 'teams' collection.");
+        }
+
+        allTeamsSnapshot.forEach(doc => {
+          const data = doc.data();
+          const rawTeamName = data.teamName || data.TeamName || data.Team || data.name || doc.id || "";
+          const rawPassword = data.password || data.Password || data.pass || data.leaderName || "";
+
+          const normalize = (str: any) => str ? str.toString().trim().toLowerCase().replace(/\s+/g, "") : "";
+
+          if (normalize(rawTeamName) === normalize(teamName) && normalize(rawPassword) === normalize(password)) {
+            matchedTeamDoc = doc;
+            actualTeamName = rawTeamName;
+          }
+        });
+      }
 
       if (!matchedTeamDoc) {
-        console.log("❌ No matching team found");
-        alert("❌ Invalid team name or leader name!");
+        console.log("❌ No matching team found in database.");
+        alert(`❌ Login Failed!\n\n1. Check if Team "${teamName}" exists in your Firebase 'teams' collection.\n2. Ensure the password matches exactly.\n3. Verify your Project ID is "${firebaseConfig.projectId}" (it must match where you added the teams).`);
         setIsLoggingIn(false);
         return;
       }
@@ -866,7 +869,7 @@ export default function EventPlatform() {
       await setDoc(doc(db, "activeSessions", actualTeamName), {
         teamName: actualTeamName,
         deviceId,
-        leaderName: leaderName,
+        password: password,
         loginTime: new Date(),
         score: currentScore,
         round: currentRound,
@@ -891,7 +894,7 @@ export default function EventPlatform() {
       localStorage.setItem("eventQIndex", currentQIdx.toString());
       localStorage.setItem("eventAnsweredR1", JSON.stringify(currentAnswered));
       localStorage.setItem("eventFinished", isFinished.toString());
-      
+
       setTeamName(actualTeamName);
       setScore(currentScore);
       setRound(currentRound);
@@ -921,7 +924,7 @@ export default function EventPlatform() {
     }
   };
 
-  const syncProgress = async (updates: { score?: number, round?: number, qIndex?: number, answered?: number[], isFinished?: boolean }, targetTeam?: string) => {
+  const syncProgress = async (updates: { score?: number, round?: number, qIndex?: number, answered?: number[], isFinished?: boolean, isRound1Completed?: boolean }, targetTeam?: string) => {
     const name = targetTeam || teamName || localStorage.getItem("eventTeamName");
     if (!name) return;
 
@@ -931,6 +934,7 @@ export default function EventPlatform() {
     if (updates.qIndex !== undefined) data.currentQIndex = updates.qIndex;
     if (updates.answered !== undefined) data.answeredInR1 = updates.answered;
     if (updates.isFinished !== undefined) data.isFinished = updates.isFinished;
+    if (updates.isRound1Completed !== undefined) data.isRound1Completed = updates.isRound1Completed;
 
     try {
       await setDoc(doc(db, "activeSessions", name), data, { merge: true });
@@ -971,13 +975,13 @@ export default function EventPlatform() {
     localStorage.removeItem("eventQIndex");
     localStorage.removeItem("eventAnsweredR1");
     localStorage.removeItem("eventFinished");
-    localStorage.removeItem("eventTimeLeft");
-    localStorage.removeItem("eventTimerActive");
+    localStorage.removeItem("eventQTimeLeft");
+    localStorage.removeItem("eventQTimerActive");
     localStorage.removeItem("eventRound1Completed");
 
     setView("role-selection");
     setTeamName("");
-    setLeaderName("");
+    setPassword("");
     setScore(0);
     setRound(1);
     setCurrentQIndex(0);
@@ -1035,6 +1039,79 @@ export default function EventPlatform() {
     setIsRunning(false);
   };
 
+  const seedTeams = async () => {
+    if (!confirm("⚠️ This will populate the 'teams' collection with 40+ teams. Continue?")) return;
+    
+    setIsLoggingIn(true);
+    let count = 0;
+    try {
+      const teamsToSeed = [
+        { TeamName: "Team Alpha", password: "pass123" },
+        { TeamName: "Team Beta", password: "pass123" },
+        { TeamName: "Team Gamma", password: "pass123" },
+        { TeamName: "Fafda Fighters", password: "fafda123" },
+        { TeamName: "Codez", password: "codez123" },
+        { TeamName: "POWERPUFFGIRLS", password: "powerpuff123" },
+        { TeamName: "Razz", password: "razz123" },
+        { TeamName: "Racoon City", password: "racoon123" },
+        { TeamName: "Alpha Koders", password: "alpha123" },
+        { TeamName: "Tech Titans", password: "titans123" },
+        { TeamName: "Gang coders", password: "gang123" },
+        { TeamName: "LNC", password: "lnc123" },
+        { TeamName: "N0VA", password: "nova123" },
+        { TeamName: "LUMINA", password: "lumina123" },
+        { TeamName: "Penguins", password: "penguins123" },
+        { TeamName: "Compact", password: "compact123" },
+        { TeamName: "Syntax Squad", password: "syntax123" },
+        { TeamName: "Techies", password: "techies123" },
+        { TeamName: "Byte", password: "byte123" },
+        { TeamName: "Dream", password: "dream123" },
+        { TeamName: "Final Commit", password: "commit123" },
+        { TeamName: "BRAIN NOT FOUND", password: "brain123" },
+        { TeamName: "DietCoke", password: "diet123" },
+        { TeamName: "Urban Graphics", password: "urban123" },
+        { TeamName: "EDITH", password: "edith123" },
+        { TeamName: "MOHAMED BADRELDIN", password: "mohamed123" },
+        { TeamName: "Matrix", password: "matrix123" },
+        { TeamName: "ABC", password: "abc123" },
+        { TeamName: "Tech X", password: "techx123" },
+        { TeamName: "Priyansh", password: "priyansh123" },
+        { TeamName: "The Satyaarth", password: "satyaarth123" },
+        { TeamName: "HOUSE STARK", password: "stark123" },
+        { TeamName: "HOUSE TARGARYEN", password: "targaryen123" },
+        { TeamName: "Coding Cartel", password: "cartel123" },
+        { TeamName: "Vamos", password: "vamos123" },
+        { TeamName: "Machhapuchhre", password: "machha123" },
+        { TeamName: "Khukuri", password: "khukuri123" },
+        { TeamName: "X Coders", password: "xcoders123" },
+        { TeamName: "Tricoders", password: "tricoders123" },
+        { TeamName: "Phub", password: "phub123" },
+        { TeamName: "POOKIE JANTA PARTY (PJP)", password: "pjp123" },
+        { TeamName: "STRONGLY DEPENDENT PEOPLE", password: "sdp123" },
+        { TeamName: "Atlas", password: "atlas123" },
+        { TeamName: "three musketeers", password: "musk123" }
+      ];
+
+      for (const team of teamsToSeed) {
+        await setDoc(doc(db, "teams", team.TeamName), {
+          TeamName: team.TeamName,
+          password: team.password,
+          registered: true,
+          score: 0
+        });
+        count++;
+        console.log(`✅ Seeded ${count}/${teamsToSeed.length}: ${team.TeamName}`);
+      }
+      
+      alert(`🎉 SUCCESS! ${count} teams seeded successfully to Firestore.`);
+    } catch (error: any) {
+      console.error("Seed error:", error);
+      alert(`❌ ERROR: ${error.message}\n\nMake sure your Firestore Rules are set to: allow read, write: if true;`);
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
   // Add debug function to check teams
   const debugTeams = async () => {
     try {
@@ -1053,7 +1130,7 @@ export default function EventPlatform() {
   const debugLogin = async () => {
     try {
       console.log("🔍 DEBUG MODE");
-      console.log("Current input - Team:", teamName, "Leader:", leaderName);
+      console.log("Current input - Team:", teamName, "Leader:", password);
 
       // 1. Check all teams first
       const allTeams = await getDocs(collection(db, "teams"));
@@ -1082,14 +1159,14 @@ export default function EventPlatform() {
 
         const normalize = (str: string) => str.trim().toLowerCase().replace(/\s+/g, "");
 
-        if (normalize(rawTeamName) === normalize(teamName) && normalize(rawLeaderName) === normalize(leaderName)) {
+        if (normalize(rawTeamName) === normalize(teamName) && normalize(rawLeaderName) === normalize(password)) {
           foundMatch = data;
           actualTeamName = rawTeamName;
         }
       });
 
       if (!foundMatch) {
-        alert(`❌ No match found for Team: "${teamName}" with Leader: "${leaderName}"\n\nCheck console for all teams.`);
+        alert(`❌ No match found for Team: "${teamName}" with Leader: "${password}"\n\nCheck console for all teams.`);
       } else {
         alert(`✅ Match found! Team data: ${JSON.stringify(foundMatch)}`);
       }
@@ -1109,14 +1186,14 @@ export default function EventPlatform() {
     try {
       // 1. Reset 'teams' collection
       const teamsSnap = await getDocs(collection(db, "teams"));
-      const teamPromises = teamsSnap.docs.map(teamDoc => 
+      const teamPromises = teamsSnap.docs.map(teamDoc =>
         setDoc(doc(db, "teams", teamDoc.id), { score: 0 }, { merge: true })
       );
 
       // 2. Reset 'activeSessions' collection (score AND progress)
       const sessionsSnap = await getDocs(collection(db, "activeSessions"));
-      const sessionPromises = sessionsSnap.docs.map(sessionDoc => 
-        setDoc(doc(db, "activeSessions", sessionDoc.id), { 
+      const sessionPromises = sessionsSnap.docs.map(sessionDoc =>
+        setDoc(doc(db, "activeSessions", sessionDoc.id), {
           score: 0,
           round: 1,
           currentQIndex: 0,
@@ -1127,14 +1204,15 @@ export default function EventPlatform() {
         }, { merge: true })
       );
 
-      const metadataUpdate = setDoc(doc(db, "eventSettings", "metadata"), { 
+      const metadataUpdate = setDoc(doc(db, "eventSettings", "metadata"), {
         round1Enabled: false,
         globalTimerActive: false,
-        globalTimeLeft: 300
+        globalTimeLeft: 300,
+        timerEndTime: null
       }, { merge: true });
 
       await Promise.all([...teamPromises, ...sessionPromises, metadataUpdate]);
-      
+
       alert("✅ All points and progress have been reset!");
       // Reset local state if applicable
       localStorage.setItem("eventTeamScore", "0");
@@ -1142,9 +1220,7 @@ export default function EventPlatform() {
       localStorage.setItem("eventQIndex", "0");
       localStorage.setItem("eventAnsweredR1", "[]");
       localStorage.setItem("eventFinished", "false");
-      localStorage.setItem("eventTimeLeft", "300");
-      localStorage.setItem("eventTimerActive", "false");
-      
+
       setScore(0);
       setRound(1);
       setCurrentQIndex(0);
@@ -1161,21 +1237,20 @@ export default function EventPlatform() {
   const setRound1Status = async (status: boolean) => {
     try {
       if (status) {
-        // Starting/Resuming Round 1
-        // Only set to 300 if it's currently 0 or near-zero (fresh start)
-        const updateData: any = { 
+        let currentTimer = globalTimeLeft;
+        if (currentTimer <= 0) currentTimer = 300;
+
+        await setDoc(doc(db, "eventSettings", "metadata"), {
           round1Enabled: true,
-          globalTimerActive: true
-        };
-        if (globalTimeLeft <= 0) {
-          updateData.globalTimeLeft = 300;
-        }
-        await setDoc(doc(db, "eventSettings", "metadata"), updateData, { merge: true });
+          globalTimerActive: true,
+          timerEndTime: Date.now() + (currentTimer * 1000)
+        }, { merge: true });
       } else {
-        // Stopping/Pausing
-        await setDoc(doc(db, "eventSettings", "metadata"), { 
+        await setDoc(doc(db, "eventSettings", "metadata"), {
           round1Enabled: false,
-          globalTimerActive: false
+          globalTimerActive: false,
+          globalTimeLeft: globalTimeLeft, // Store current countdown state
+          timerEndTime: null
         }, { merge: true });
       }
       alert(`Round 1 status updated to: ${status ? "STARTED" : "STOPPED"}`);
@@ -1184,10 +1259,25 @@ export default function EventPlatform() {
     }
   };
 
+  const setRound2Status = async (status: boolean) => {
+    try {
+      await setDoc(doc(db, "eventSettings", "metadata"), {
+        round2Enabled: status
+      }, { merge: true });
+      alert(`Round 2 status updated to: ${status ? "STARTED" : "STOPPED"}`);
+    } catch (error: any) {
+      alert("Error updating round 2 status: " + error.message);
+    }
+  };
+
   const adjustGlobalTimer = async (seconds: number) => {
     try {
       const newTime = Math.max(0, globalTimeLeft + seconds);
-      await setDoc(doc(db, "eventSettings", "metadata"), { globalTimeLeft: newTime }, { merge: true });
+      const updateData: any = { globalTimeLeft: newTime };
+      if (globalTimerActive && timerEndTime) {
+        updateData.timerEndTime = timerEndTime + (seconds * 1000);
+      }
+      await setDoc(doc(db, "eventSettings", "metadata"), updateData, { merge: true });
     } catch (error: any) {
       console.error("Timer adjustment error:", error);
     }
@@ -1195,7 +1285,21 @@ export default function EventPlatform() {
 
   const toggleGlobalTimer = async () => {
     try {
-      await setDoc(doc(db, "eventSettings", "metadata"), { globalTimerActive: !globalTimerActive }, { merge: true });
+      if (globalTimerActive) {
+        // Pause
+        await setDoc(doc(db, "eventSettings", "metadata"), {
+          globalTimerActive: false,
+          globalTimeLeft: globalTimeLeft,
+          timerEndTime: null
+        }, { merge: true });
+      } else {
+        // Resume
+        await setDoc(doc(db, "eventSettings", "metadata"), {
+          globalTimeLeft: globalTimeLeft,
+          globalTimerActive: true,
+          timerEndTime: Date.now() + (globalTimeLeft * 1000)
+        }, { merge: true });
+      }
     } catch (error: any) {
       console.error("Timer toggle error:", error);
     }
@@ -1216,7 +1320,7 @@ export default function EventPlatform() {
   // Admin Dashboard
   if (view === "admin-dashboard") {
     return (
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         className="min-h-screen bg-fancy bg-slate-950 p-8 md:p-12"
@@ -1224,7 +1328,7 @@ export default function EventPlatform() {
         <div className="max-w-7xl mx-auto">
           <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-16 gap-8">
             <div className="text-left">
-              <motion.h1 
+              <motion.h1
                 initial={{ x: -30, opacity: 0 }}
                 animate={{ x: 0, opacity: 1 }}
                 className="text-8xl font-black italic uppercase text-gradient text-glow mb-2 tracking-tighter"
@@ -1233,7 +1337,7 @@ export default function EventPlatform() {
               </motion.h1>
               <p className="text-emerald-400 font-black tracking-[0.8em] uppercase text-[10px] ml-2">System Authority Level 01</p>
             </div>
-            
+
             <div className="flex flex-wrap gap-6">
               <motion.button
                 whileHover={{ scale: 1.02 }}
@@ -1244,7 +1348,7 @@ export default function EventPlatform() {
                 <RefreshCcw className="w-5 h-5" />
                 CLEAR_NODES
               </motion.button>
-              
+
               <motion.button
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
@@ -1254,7 +1358,17 @@ export default function EventPlatform() {
                 <Play className="w-5 h-5 flex-shrink-0" />
                 {round1Enabled ? "SUSPEND ROUND 1" : "INITIATE ROUND 1"}
               </motion.button>
-              
+
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={() => setRound2Status(!round2Enabled)}
+                className={`btn-premium ${round2Enabled ? "!bg-amber-600 shadow-amber-600/40" : "!bg-indigo-600 shadow-indigo-600/40"}`}
+              >
+                <Code2 className="w-5 h-5 flex-shrink-0" />
+                {round2Enabled ? "SUSPEND ROUND 2" : "INITIATE ROUND 2"}
+              </motion.button>
+
               {round1Enabled && (
                 <div className="flex items-center gap-4 bg-slate-900/80 px-6 py-3 rounded-2xl border border-white/5 backdrop-blur-xl">
                   <Timer className="w-6 h-6 text-emerald-400" />
@@ -1270,9 +1384,9 @@ export default function EventPlatform() {
                   </div>
                 </div>
               )}
-              
-              <button 
-                onClick={() => setView("role-selection")} 
+
+              <button
+                onClick={() => setView("role-selection")}
                 className="btn-secondary !border-white/5 hover:!border-white/20"
               >
                 <LogOut className="w-5 h-5" />
@@ -1282,7 +1396,7 @@ export default function EventPlatform() {
           </header>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-16">
-            <motion.div 
+            <motion.div
               initial={{ y: 20, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
               transition={{ delay: 0.1 }}
@@ -1297,7 +1411,7 @@ export default function EventPlatform() {
               </div>
             </motion.div>
 
-            <motion.div 
+            <motion.div
               initial={{ y: 20, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
               transition={{ delay: 0.2 }}
@@ -1313,7 +1427,7 @@ export default function EventPlatform() {
               </div>
             </motion.div>
 
-            <motion.div 
+            <motion.div
               initial={{ y: 20, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
               transition={{ delay: 0.3 }}
@@ -1329,7 +1443,7 @@ export default function EventPlatform() {
             </motion.div>
           </div>
 
-          <motion.div 
+          <motion.div
             initial={{ y: 30, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             transition={{ delay: 0.4 }}
@@ -1345,7 +1459,7 @@ export default function EventPlatform() {
                 REALTIME_DATASTREAM
               </div>
             </div>
-            
+
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
@@ -1361,7 +1475,7 @@ export default function EventPlatform() {
                 <tbody className="divide-y divide-white/5">
                   <AnimatePresence mode='popLayout'>
                     {leaderboard.map((team, i) => (
-                      <motion.tr 
+                      <motion.tr
                         layout
                         initial={{ opacity: 0, x: -10 }}
                         animate={{ opacity: 1, x: 0 }}
@@ -1434,7 +1548,7 @@ export default function EventPlatform() {
         <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-emerald-600/10 rounded-full blur-[120px] pointer-events-none" />
         <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-600/10 rounded-full blur-[120px] pointer-events-none" />
 
-        <motion.div 
+        <motion.div
           initial={{ y: 30, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
           className="relative z-10 w-full max-w-5xl text-center"
@@ -1448,7 +1562,7 @@ export default function EventPlatform() {
               <Award className="w-10 h-10 text-white" />
             </div>
           </motion.div>
-          
+
           <h1 className="text-8xl md:text-9xl font-black mb-6 tracking-tight leading-none text-gradient text-glow italic">
             HACKandCRACK
           </h1>
@@ -1458,17 +1572,17 @@ export default function EventPlatform() {
 
           <AnimatePresence mode="wait">
             {view === "role-selection" && (
-              <motion.div 
+              <motion.div
                 key="roles"
                 initial={{ opacity: 0, y: 30 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95 }}
                 className="grid grid-cols-1 md:grid-cols-2 gap-10 max-w-4xl mx-auto"
               >
-                <motion.button 
+                <motion.button
                   whileHover={{ y: -10, scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
-                  onClick={() => setView("student-login")} 
+                  onClick={() => setView("student-login")}
                   className="glass-card group text-left !p-12 border-white/5 hover:border-emerald-500/20"
                 >
                   <div className="p-5 bg-emerald-500/10 rounded-3xl w-fit mb-10 group-hover:bg-emerald-600 group-hover:shadow-[0_0_30px_rgba(16,185,129,0.4)] transition-all duration-500">
@@ -1481,10 +1595,10 @@ export default function EventPlatform() {
                   </div>
                 </motion.button>
 
-                <motion.button 
+                <motion.button
                   whileHover={{ y: -10, scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
-                  onClick={() => setView("admin-login")} 
+                  onClick={() => setView("admin-login")}
                   className="glass-card group text-left !p-12 border-white/5 hover:border-blue-500/20"
                 >
                   <div className="p-5 bg-slate-800/50 rounded-3xl w-fit mb-10 group-hover:bg-blue-600 group-hover:shadow-[0_0_30px_rgba(59,130,246,0.4)] transition-all duration-500">
@@ -1499,8 +1613,24 @@ export default function EventPlatform() {
               </motion.div>
             )}
 
+            {view === "role-selection" && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 0.3 }}
+                whileHover={{ opacity: 1 }}
+                className="mt-24"
+              >
+                <button
+                  onClick={seedTeams}
+                  className="px-6 py-2 border border-white/5 bg-white/5 rounded-full text-[10px] font-black uppercase tracking-[0.6em] text-slate-500 hover:text-emerald-400 hover:border-emerald-500/30 transition-all"
+                >
+                  [ SYSTEM_INITIALIZATION_BYPASS ]
+                </button>
+              </motion.div>
+            )}
+
             {view === "student-login" && (
-              <motion.div 
+              <motion.div
                 key="student-login"
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
@@ -1511,7 +1641,7 @@ export default function EventPlatform() {
                   <h2 className="text-5xl font-black mb-4 tracking-tighter italic text-white">ACCESSING_</h2>
                   <p className="text-slate-400 font-medium text-lg">Initialize your team node to synchronize with the arena.</p>
                 </div>
-                
+
                 <div className="space-y-8">
                   <div className="group">
                     <div className="text-[10px] font-black text-emerald-400 uppercase tracking-[0.4em] mb-3 ml-2 group-focus-within:text-white transition-colors">Team_Identity</div>
@@ -1528,13 +1658,13 @@ export default function EventPlatform() {
                     <input
                       placeholder="••••••••"
                       type="password"
-                      value={leaderName}
+                      value={password}
                       className="w-full px-8 py-6 bg-slate-950/50 rounded-[1.5rem] text-2xl border border-white/5 focus:border-indigo-500/50 outline-none transition-all placeholder:text-slate-800 font-bold text-white"
-                      onChange={e => setLeaderName(e.target.value)}
+                      onChange={e => setPassword(e.target.value)}
                       onKeyDown={e => e.key === 'Enter' && handleStudentLogin()}
                     />
                   </div>
-                  
+
                   <motion.button
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
@@ -1551,9 +1681,9 @@ export default function EventPlatform() {
                       </div>
                     )}
                   </motion.button>
-                  
-                  <button 
-                    onClick={() => setView("role-selection")} 
+
+                  <button
+                    onClick={() => setView("role-selection")}
                     className="w-full text-slate-500 font-black uppercase text-xs tracking-[0.4em] hover:text-white transition-colors pt-8 flex items-center justify-center gap-4 group"
                   >
                     <div className="w-8 h-[1px] bg-slate-800 group-hover:bg-white transition-colors" />
@@ -1565,7 +1695,7 @@ export default function EventPlatform() {
             )}
 
             {view === "admin-login" && (
-              <motion.div 
+              <motion.div
                 key="admin-login"
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
@@ -1579,7 +1709,7 @@ export default function EventPlatform() {
                   </h2>
                   <p className="text-slate-500 font-medium">Verify system authority.</p>
                 </div>
-                
+
                 <div className="space-y-6">
                   <input
                     type="password"
@@ -1589,7 +1719,7 @@ export default function EventPlatform() {
                     onChange={e => setInputAdminPass(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && handleAdminLogin()}
                   />
-                  
+
                   <motion.button
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
@@ -1598,9 +1728,9 @@ export default function EventPlatform() {
                   >
                     AUTHORIZE
                   </motion.button>
-                  
-                  <button 
-                    onClick={() => setView("role-selection")} 
+
+                  <button
+                    onClick={() => setView("role-selection")}
                     className="w-full text-slate-600 font-black uppercase text-[10px] tracking-[0.3em] hover:text-white transition-colors"
                   >
                     ABORT_
@@ -1618,13 +1748,13 @@ export default function EventPlatform() {
     return (
       <div className="min-h-screen bg-fancy flex items-center justify-center p-8 bg-slate-950 text-white relative overflow-hidden">
         <div className="absolute inset-0 bg-emerald-500/5 blur-[120px] rounded-full scale-150" />
-        <motion.div 
+        <motion.div
           initial={{ scale: 0.9, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
           className="glass-card max-w-2xl w-full text-center !p-24 border border-emerald-500/10 shadow-[0_0_100px_rgba(16,185,129,0.1)] relative z-10"
         >
           <motion.div
-            animate={{ 
+            animate={{
               rotate: [0, 5, -5, 5, 0],
               scale: [1, 1.05, 1]
             }}
@@ -1634,18 +1764,18 @@ export default function EventPlatform() {
             <Trophy className="w-28 h-28 text-emerald-400 accent-glow shadow-2xl" />
             <div className="absolute inset-0 bg-emerald-500/10 blur-2xl rounded-full" />
           </motion.div>
-          
+
           <h1 className="text-8xl font-black mb-6 text-gradient italic tracking-tighter uppercase text-glow">VICTORY_</h1>
           <p className="text-3xl text-slate-400 font-bold mb-12 italic leading-tight tracking-tight">
-            Node successfully synchronized. <br/>Challenge requirements satisfied.
+            Node successfully synchronized. <br />Challenge requirements satisfied.
           </p>
-          
+
           <div className="bg-slate-950/50 p-12 rounded-[2.5rem] border border-white/5 mb-16 shadow-inner">
             <p className="text-slate-600 font-black uppercase tracking-[0.6em] text-[10px] mb-4 opacity-60">Final_Cumulative_Score</p>
             <div className="text-9xl font-black text-emerald-400 text-glow tracking-tighter">{score}</div>
           </div>
 
-          <motion.button 
+          <motion.button
             whileHover={{ scale: 1.05, y: -5 }}
             whileTap={{ scale: 0.95 }}
             onClick={handleLogout}
@@ -1661,7 +1791,7 @@ export default function EventPlatform() {
   if (isRound1Completed) {
     return (
       <div className="min-h-screen bg-fancy flex items-center justify-center p-8 bg-slate-950 text-white relative">
-        <motion.div 
+        <motion.div
           initial={{ scale: 0.95, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
           className="glass-card max-w-2xl w-full text-center !p-24 border border-emerald-500/10 shadow-2xl"
@@ -1671,12 +1801,37 @@ export default function EventPlatform() {
           </div>
           <h1 className="text-7xl font-black mb-8 text-gradient italic tracking-tighter uppercase text-glow">PHASE_01_COMPLETE</h1>
           <p className="text-3xl text-slate-400 font-bold mb-12 italic leading-tight">
-            Analytical logic modules finished. <br/>Stand by for synthetic phase authorization.
+            Analytical logic modules finished. <br />Stand by for synthetic phase authorization.
           </p>
           <div className="bg-slate-950/50 p-12 rounded-[2.5rem] border border-white/5 mb-8">
             <p className="text-slate-600 font-black uppercase tracking-[0.6em] text-[10px] mb-4 opacity-60">Phase_01_Score</p>
             <div className="text-8xl font-black text-emerald-400 text-glow tracking-tighter">{score}</div>
           </div>
+
+          {round2Enabled ? (
+            <motion.button
+              whileHover={{ scale: 1.05, y: -5 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => {
+                setRound(2);
+                setCurrentQIndex(0);
+                setIsRound1Completed(false);
+                setShowRoundIntro(true);
+                localStorage.setItem("eventRound", "2");
+                localStorage.setItem("eventQIndex", "0");
+                syncProgress({ round: 2, qIndex: 0 });
+              }}
+              className="btn-premium !bg-indigo-600 !px-24 !py-8 text-2xl shadow-indigo-500/40"
+            >
+              PROCEED TO PHASE 02
+            </motion.button>
+          ) : (
+            <div className="bg-amber-500/5 border border-amber-500/10 p-10 rounded-[2.5rem]">
+              <p className="text-amber-500 font-black uppercase text-sm tracking-[0.5em] animate-pulse italic">
+                Awaiting Authorization for Phase 02...
+              </p>
+            </div>
+          )}
         </motion.div>
       </div>
     );
@@ -1686,7 +1841,7 @@ export default function EventPlatform() {
     const isR1 = round === 1;
     return (
       <div className="min-h-screen bg-fancy flex items-center justify-center p-8 bg-slate-950 text-white relative">
-        <motion.div 
+        <motion.div
           initial={{ y: 50, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
           className="glass-card max-w-4xl w-full text-center !p-24 border border-emerald-500/10 shadow-2xl"
@@ -1697,10 +1852,10 @@ export default function EventPlatform() {
               <div className="absolute -top-3 -right-3 w-8 h-8 bg-emerald-500 rounded-full animate-ping opacity-20" />
             </div>
           </div>
-          
+
           <p className="text-emerald-400 font-black tracking-[0.8em] uppercase text-[10px] mb-5 opacity-40">System_Initialization_v1.0.4</p>
           <h1 className="text-9xl font-black mb-10 text-gradient italic tracking-tighter uppercase text-glow">PHASE_0{round}</h1>
-          
+
           <div className="bg-slate-950/60 p-12 rounded-[3rem] border border-white/5 mb-16 text-left relative overflow-hidden">
             <div className="absolute top-0 right-0 p-8 opacity-5">
               <Terminal className="w-32 h-32" />
@@ -1709,14 +1864,14 @@ export default function EventPlatform() {
               {isR1 ? "01: Analytical Neural Patterns" : "02: Synthetic Logic Deployment"}
             </h3>
             <p className="text-2xl text-slate-400 leading-relaxed font-medium italic">
-              {isR1 
-                ? "In this phase, you must decode complex structural deviations. Latency and accuracy are critical for global synchronization." 
+              {isR1
+                ? "In this phase, you must decode complex structural deviations. Latency and accuracy are critical for global synchronization."
                 : "Manual implementation required. Deploy high-level Python protocols to solve the objective."}
             </p>
           </div>
 
           {round1Enabled && isR1 && (
-            <motion.button 
+            <motion.button
               whileHover={{ scale: 1.05, y: -5 }}
               whileTap={{ scale: 0.95 }}
               onClick={() => {
@@ -1740,7 +1895,7 @@ export default function EventPlatform() {
           )}
 
           {!isR1 && (
-            <motion.button 
+            <motion.button
               whileHover={{ scale: 1.05, y: -5 }}
               whileTap={{ scale: 0.95 }}
               onClick={() => setShowRoundIntro(false)}
@@ -1756,14 +1911,14 @@ export default function EventPlatform() {
 
   // GAME VIEW
   return (
-    <motion.div 
+    <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       className="min-h-screen bg-fancy bg-slate-950 p-6 md:p-10 flex flex-col items-center relative"
     >
       {round === 1 && !round1Enabled && !isRound1Completed && (
         <div className="absolute inset-0 z-[100] flex items-center justify-center backdrop-blur-xl bg-slate-950/80 transition-all duration-700">
-          <motion.div 
+          <motion.div
             initial={{ scale: 0.95, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             className="glass p-20 rounded-[4rem] text-center max-w-2xl border-2 border-amber-500/20 shadow-[0_0_80px_rgba(245,158,11,0.1)]"
@@ -1775,7 +1930,7 @@ export default function EventPlatform() {
             </div>
             <h2 className="text-7xl font-black text-amber-500 italic uppercase mb-8 tracking-tighter text-glow">NODE_IDLE</h2>
             <p className="text-2xl text-slate-400 font-medium leading-relaxed italic">
-              System access temporarily suspended by the system administrator. <br/>
+              System access temporarily suspended by the system administrator. <br />
               Security tokens retained. Stand by for resumption.
             </p>
           </motion.div>
@@ -1794,12 +1949,22 @@ export default function EventPlatform() {
                 {teamName}
                 <div className="badge-live !bg-emerald-500/5 !text-emerald-400 !border-emerald-500/20">NODE_ACTIVE</div>
               </h2>
-              <p className="text-slate-500 font-black uppercase tracking-[0.6em] mt-2 text-[10px] opacity-60">Session_Lead: {leaderName}</p>
+              <p className="text-slate-500 font-black uppercase tracking-[0.6em] mt-2 text-[10px] opacity-60">Session_Lead: {password}</p>
             </div>
           </div>
 
-          
+
           <div className="flex-1 flex items-center justify-end gap-12">
+            {round === 1 && (
+              <div className="flex items-center gap-4 bg-slate-900/60 px-6 py-3 rounded-2xl border border-white/5 backdrop-blur-xl">
+                <Timer className="w-5 h-5 text-emerald-400" />
+                <span className={`text-2xl font-black italic tabular-nums ${globalTimeLeft < 60 ? 'text-rose-500 animate-pulse' : 'text-white'}`}>
+                  {Math.floor(globalTimeLeft / 60).toString().padStart(2, '0')}:{(globalTimeLeft % 60).toString().padStart(2, '0')}
+                </span>
+                <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest hidden md:inline ml-2">Total_Phase_Time</span>
+              </div>
+            )}
+
             <div className="text-right">
               <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.4em] mb-3 opacity-60">Standing_Score</p>
               <div className="text-6xl font-black text-white flex items-center gap-5">
@@ -1807,7 +1972,7 @@ export default function EventPlatform() {
                 <Trophy className="w-8 h-8 text-blue-500 accent-glow shadow-blue-500/20" />
               </div>
             </div>
-            
+
             <motion.button
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
@@ -1823,7 +1988,7 @@ export default function EventPlatform() {
 
         <AnimatePresence mode="wait">
           {round === 1 ? (
-            <motion.div 
+            <motion.div
               key="round1"
               initial={{ x: 30, opacity: 0 }}
               animate={{ x: 0, opacity: 1 }}
@@ -1837,27 +2002,24 @@ export default function EventPlatform() {
                     OBJECTIVE: Identify Structural Deviations
                   </div>
                 </div>
-                
+
                 <div className="flex flex-col md:flex-row items-center justify-between gap-12 mb-16 text-left">
                   <h3 className="text-2xl md:text-4xl font-black leading-tight text-white tracking-tighter italic text-glow flex-1">
                     {currentQ.text}
                   </h3>
-                  
-                  <div className={`flex-shrink-0 w-24 h-24 md:w-32 md:h-32 rounded-full border-[4px] flex items-center justify-center transition-all duration-300 shadow-2xl relative overflow-hidden ${
-                    questionTimeLeft <= 3 ? 'border-rose-500 shadow-rose-500/40 bg-rose-500/10' : 'border-emerald-500/20 shadow-emerald-500/20 bg-emerald-500/5'
-                  }`}>
-                    <div className={`text-4xl md:text-6xl font-black italic tabular-nums tracking-tighter text-glow ${
-                      questionTimeLeft <= 3 ? 'text-rose-500 animate-pulse' : 'text-emerald-400'
+
+                  <div className={`flex-shrink-0 w-24 h-24 md:w-32 md:h-32 rounded-full border-[4px] flex items-center justify-center transition-all duration-300 shadow-2xl relative overflow-hidden ${questionTimeLeft <= 3 ? 'border-rose-500 shadow-rose-500/40 bg-rose-500/10' : 'border-emerald-500/20 shadow-emerald-500/20 bg-emerald-500/5'
                     }`}>
+                    <div className={`text-4xl md:text-6xl font-black italic tabular-nums tracking-tighter text-glow ${questionTimeLeft <= 3 ? 'text-rose-500 animate-pulse' : 'text-emerald-400'
+                      }`}>
                       {questionTimeLeft}
                     </div>
                     {/* Subtle spinning accent for the circle */}
-                    <div className={`absolute inset-0 border-t-4 border-transparent rounded-full animate-spin transition-colors ${
-                      questionTimeLeft <= 3 ? 'border-rose-500/40' : 'border-emerald-500/40'
-                    }`} style={{ animationDuration: '2s' }} />
+                    <div className={`absolute inset-0 border-t-4 border-transparent rounded-full animate-spin transition-colors ${questionTimeLeft <= 3 ? 'border-rose-500/40' : 'border-emerald-500/40'
+                      }`} style={{ animationDuration: '2s' }} />
                   </div>
                 </div>
-                
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                   {currentQ.options.map((o, i) => (
                     <motion.button
@@ -1870,13 +2032,13 @@ export default function EventPlatform() {
                       onClick={() => {
                         const alreadyAnswered = answeredInR1.has(currentQ.id);
                         if (!alreadyAnswered) {
-                          const newScore = o !== currentQ.correctAnswer ? score + 1 : score;
-                          if (o !== currentQ.correctAnswer) setScore(newScore);
-                          
+                          const newScore = o === currentQ.correctAnswer ? score + 1 : score;
+                          if (o === currentQ.correctAnswer) setScore(newScore);
+
                           const newAnswered = new Set(answeredInR1);
                           newAnswered.add(currentQ.id);
                           setAnsweredInR1(newAnswered);
-                          
+
                           const answeredArr = Array.from(newAnswered);
                           localStorage.setItem("eventAnsweredR1", JSON.stringify(answeredArr));
                           localStorage.setItem("eventTeamScore", newScore.toString());
@@ -1921,14 +2083,14 @@ export default function EventPlatform() {
               </div>
             </motion.div>
           ) : (
-            <motion.div 
+            <motion.div
               key="round2"
               initial={{ scale: 0.98, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               className="grid grid-cols-1 lg:grid-cols-2 gap-10 w-full"
             >
               <div className="flex flex-col gap-10 w-full">
-                <motion.div 
+                <motion.div
                   initial={{ x: -30, opacity: 0 }}
                   animate={{ x: 0, opacity: 1 }}
                   className="glass-card border-blue-500/10 relative overflow-hidden !p-12"
@@ -1965,7 +2127,7 @@ export default function EventPlatform() {
                       )}
                     </div>
                     {isSolved && (
-                      <motion.div 
+                      <motion.div
                         initial={{ y: 20, opacity: 0 }}
                         animate={{ y: 0, opacity: 1 }}
                         className="mt-12 flex items-center gap-6 text-emerald-400 font-black italic bg-emerald-500/5 p-8 rounded-[2rem] border border-emerald-500/20 shadow-[0_0_40px_rgba(16,185,129,0.1)] transition-all"
@@ -2060,7 +2222,7 @@ export default function EventPlatform() {
                         setCurrentQIndex(nextIdx);
                         localStorage.setItem("eventQIndex", nextIdx.toString());
                         syncProgress({ qIndex: nextIdx });
-                        
+
                         setCode("# Write your Python code here...\n");
                         setOutput("");
                         setIsSolved(false);
